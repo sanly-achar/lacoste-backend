@@ -1,0 +1,214 @@
+from inspect import trace
+from django.core import paginator
+from django.db.models import query
+from django.http.response import ResponseHeaders
+from django.shortcuts import render
+
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated, IsAdminUser
+from rest_framework.response import Response
+from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
+
+from base.models import Product, Review, Banner, Settings, Category
+from base.serializers import ProductSerializer, BannerSerializer, SettingsSerializer, CategorySerializer
+
+from rest_framework import status
+
+@api_view(['GET'])
+def getSettings(request):
+	settings = Settings.objects.get(_id=1)
+	serializer = SettingsSerializer(settings, many=False)
+	return Response(serializer.data)
+
+@api_view(['GET'])
+def getBanners(request):
+	banners = Banner.objects.all().order_by('-createdAt')[0:3]
+	serializer = BannerSerializer(banners, many=True)
+	return Response(serializer.data)
+
+@api_view(['GET'])
+def getCategories(request):
+	categories = Category.objects.all()
+	serializer = CategorySerializer(categories, many=True)
+
+	return Response(serializer.data)
+
+@api_view(['GET'])
+def getProducts(request):
+	query = request.query_params.get('keyword')
+	if query == None:
+		query = ''
+
+	products = Product.objects.filter(name__icontains=query).order_by('-createdAt')
+
+	page = request.query_params.get('page')
+	paginator = Paginator(products, 8)
+
+	try:
+		products = paginator.page(page)
+	except PageNotAnInteger:
+		products = paginator.page(1)
+	except EmptyPage:
+		products = paginator.page(paginator.num_pages)
+
+	if page==None:
+		page = 1
+
+	page = int(page)
+
+	serializer = ProductSerializer(products, many=True)
+	return Response({'products': serializer.data, 'page':page, 'pages':paginator.num_pages})
+
+@api_view(['GET'])
+def getTopProducts(request):
+	products = Product.objects.filter(rating__gte=4).order_by('-rating')[0:4]
+	serializer = ProductSerializer(products, many=True)
+	return Response(serializer.data)
+
+@api_view(['GET'])
+def getSalesProducts(request):
+	products = Product.objects.filter(isInSale=True).order_by('-createdAt')[0:4]
+	serializer = ProductSerializer(products, many=True)
+	return Response(serializer.data)
+
+@api_view(['GET'])
+def getCategoryProducts(request, pk):
+	products = Product.objects.filter(category=pk).order_by('-createdAt')
+	serializer = ProductSerializer(products, many=True)
+	return Response(serializer.data)
+
+@api_view(['GET'])
+def getMaleProducts(request):
+	products = Product.objects.filter(gender='Male').order_by('-createdAt')
+	serializer = ProductSerializer(products, many=True)
+	return Response(serializer.data)
+
+@api_view(['GET'])
+def getFemaleProducts(request):
+	products = Product.objects.filter(gender='Female').order_by('-createdAt')
+	serializer = ProductSerializer(products, many=True)
+	return Response(serializer.data)
+
+@api_view(['GET'])
+def getKidsProducts(request):
+	products = Product.objects.filter(gender='Kids').order_by('-createdAt')
+	serializer = ProductSerializer(products, many=True)
+	return Response(serializer.data)
+
+
+@api_view(['GET'])
+def getProduct(request, pk):
+	product = Product.objects.get(_id=pk)
+	serializer = ProductSerializer(product, many=False)
+	return Response(serializer.data)
+
+@api_view(['POST'])
+@permission_classes([IsAdminUser])
+def createProduct(request):
+	user = request.user
+
+	product = Product.objects.create(
+		user=user,
+		name='Nusga At',
+		price=0,
+		brand = 'Nusga Brand',
+		countInStock = 0,
+		category ='Nusga Kategoriýa',
+		description =''
+	)
+	serializer = ProductSerializer(product, many=False)
+	return Response(serializer.data)
+
+@api_view(['PUT'])
+@permission_classes([IsAdminUser])
+def updateProduct(request, pk):
+	data = request.data
+	product = Product.objects.get(_id=pk)
+
+	product.name = data['name']
+	product.price = data['price']
+	product.brand = data['brand']
+	product.countInStock = data['countInStock']
+	product.category = data['category']
+	product.description = data['description']
+
+	product.save()
+
+	serializer = ProductSerializer(product, many=False)
+	return Response(serializer.data)
+
+@api_view(['DELETE'])
+@permission_classes([IsAdminUser])
+def deleteProduct(request, pk):
+	product = Product.objects.get(_id=pk)
+	product.delete()
+	return Response('Haryt Pozuldy')
+
+@api_view(['POST'])
+def uploadImage(request):
+	data = request.data
+
+	product_id = data['product_id']
+	product = Product.objects.get(_id=product_id)
+
+	product.image = request.FILES.get('image')
+	product.save()
+
+	return Response('Surat Ýüklendi')
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def createProductReview(request, pk):
+	user = request.user
+	product = Product.objects.get(_id=pk)
+	data = request.data
+
+	#1 - Review already exists
+	alreadyExists = product.review_set.filter(user=user).exists()
+
+	if alreadyExists:
+		content = {'detail':'Haryda eýýäm komentariýa goýduňyz.'}
+		return Response(content, status=status.HTTP_400_BAD_REQUEST)
+
+	#2 - No Rating or 0
+	elif int(data['rating']) == 0:
+		content = {'detail': 'Ratingi saýlaň.'}
+		return Response(content, status=status.HTTP_400_BAD_REQUEST)
+
+	#3 - Create Review
+	else:
+		review = Review.objects.create(
+			user=user,
+			product=product,
+			name=user.first_name,
+			rating=data['rating'],
+			comment=data['comment']
+		)
+
+		reviews = product.review_set.all()
+		product.numReviews = len(reviews)
+
+		total = 0
+		for i in reviews:
+			total += i.rating
+
+		product.rating = total/len(reviews)
+		product.save()
+
+		return Response({'Komentariýa goňuldy'})
+
+
+@api_view(['PUT'])
+@permission_classes([IsAdminUser])
+def updateSettings(request):
+	data = request.data
+	settings = Settings.objects.get(_id=1)
+
+	print(data['course'])
+	print(settings.course)
+
+	settings.save()
+
+	serializer = SettingsSerializer(settings, many=False)
+	return Response(serializer.data)
